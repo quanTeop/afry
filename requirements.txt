@@ -1,0 +1,16 @@
+# Core dependencies
+streamlit==1.32.0
+pandas==2.2.0
+numpy==1.26.3
+plotly==5.19.0
+scikit-learn==1.4.0
+
+# Optional but recommended
+openpyxl==3.1.2  # Per leggere file Excel
+xlrd==2.0.1      # Per file Excel legacy
+python-dateutil==2.8.2  # Per gestione date avanzata
+
+# Per eventuali integrazioni future
+requests==2.31.0  # Per download dati da API
+beautifulsoup4==4.12.3  # Per scraping dati web
+lxml==5.1.0  # Parser HTML/XML veloce
