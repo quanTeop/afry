@@ -47,6 +47,8 @@ def read_gme_mgp_xml(files_pattern, zone="NORD"):
 # Legge tutti i file XML della cartella mgp/ che terminano con MGPPrezzi.xml filtrando nodo NORD
 mgp_nord = read_gme_mgp_xml("AFRY_MB/mgp_train/*MGPPrezzi.xml", zone="NORD")
 
+# controllo 
+
 print(mgp_nord.shape)
 print(mgp_nord.head())
 
