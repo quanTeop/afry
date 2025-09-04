@@ -56,8 +56,6 @@ mgp_nord = read_gme_mgp_xml("AFRY_MB/mgp_train/*MGPPrezzi.xml", zone="NORD")
 
 # 1.2) funzione che legga file CSV di forecast + actual demand
 
-import pandas as pd
-
 def read_load(path):
     
     # i) leggo il CSV con separatore ';' # separare manualmente le colonne è inutile
