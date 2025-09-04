@@ -107,3 +107,69 @@ test  = load_2025[(load_2025["month"] >= 7) & (load_2025["month"] <= 8)].copy() 
 # provo 
 # print(load_2025.head())
 # print("TRAIN ore:", len(train), " | TEST ore:", len(test))
+
+# 1.2) funzione che legga file CSV di forecast + actual generation
+
+def read_res_total(path):
+    # i) leggo il CSV con separatore ','
+    
+    df = pd.read_csv(path, sep=',')
+
+    # ii) prendo solo l'inizio dell'intervallo "start - end"
+    
+    start_gen = df["MTU (CET/CEST)"].astype(str).str.split(pat=" - ", n=1).str[0]
+    dt_gen = pd.to_datetime(start, dayfirst=True, errors="coerce")
+
+    # iii) conversione numerica robusta 
+    
+    f_wind_off = "Generation - Wind Offshore [MW] Day Ahead/ Italy (IT)"
+    a_wind_off = "Generation - Wind Offshore [MW] Current / Italy (IT)"
+
+    f_wind_on  = "Generation - Wind Onshore [MW] Day Ahead/ Italy (IT)"
+    a_wind_on  = "Generation - Wind Onshore [MW] Current / Italy (IT)"
+
+    f_solar    = "Generation - Solar [MW] Day Ahead/ Italy (IT)"
+    a_solar    = "Generation - Solar [MW] Current / Italy (IT)"
+
+    # Parse inizio intervallo
+    start = df[time_col].astype(str).str.split(pat=" - ", n=1).str[0]
+    dt = pd.to_datetime(start, dayfirst=True, errors="coerce")
+
+    # Conversione numerica robusta
+    to_num = lambda col: pd.to_numeric(df[col], errors="coerce")
+
+    # Somma forecast e actual delle tre tecnologie
+    generation_forecast = to_num(f_wind_off) + to_num(f_wind_on) + to_num(f_solar)
+    generation_actual   = to_num(a_wind_off) + to_num(a_wind_on) + to_num(a_solar)
+
+    out = (pd.DataFrame({
+        "datetime": dt,
+        "generation_forecast": generation_forecast,
+        "generation_actual": generation_actual
+    })
+    .dropna(subset=["datetime"])
+    .sort_values("datetime"))
+
+    # Resample: 15' → 60' con media (MW)
+    out = (out.set_index("datetime")
+              .resample("H").mean()
+              .reset_index())
+
+    # Feature extra
+    out["delta_res"] = out["generation_actual"] - out["generation_forecast"]
+    out["month"] = out["datetime"].dt.month
+    return out
+
+# --- Uso
+# path_res = "AFRY_MB/res/generation_forecast_actual.csv"
+# res_2025 = read_res_total(path_res)
+# print(res_2025.head())
+# print("Ore:", len(res_2025))
+
+
+# ---- Uso
+# path_res = "AFRY_MB/res/generation_forecast_actual.csv"
+# res_2025 = read_res(path_res)
+# print(res_2025.head())
+# print("Ore:", len(res_2025))
+
