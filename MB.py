@@ -9,10 +9,11 @@ from sklearn.metrics import mean_squared_error
 
 plt.rcParams["figure.figsize"] = (9,4)
 
-# 1) definisco funzione che legga file
+# 1) LETTURA FILE: definizione funzioni (1.1, 1.2, 1.3)
 
 # 1.1) Funzione per leggere i file XML dei prezzi MGP e filtrare una zona
-def read_gme_mgp_xml(files_pattern, zone="NORD"):
+
+def read_mgp_xml(files_pattern, zone="NORD"):
     paths = sorted(glob.glob(files_pattern))  # prendo tutti i file che matchano il pattern
     all_rows = []
 
@@ -45,7 +46,7 @@ def read_gme_mgp_xml(files_pattern, zone="NORD"):
     return df
 
 # UTILIZZO LA FUNZIONE
-mgp_nord = read_gme_mgp_xml("AFRY_MB/mgp_train/*MGPPrezzi.xml", zone="NORD")
+mgp_nord = read_mgp_xml("AFRY_MB/mgp_train/*MGPPrezzi.xml", zone="NORD")
 
 # controllo 
 
@@ -75,7 +76,7 @@ def read_load(path):
     load_forecast = pd.to_numeric(df[f_col], errors="coerce")
     load_actual   = pd.to_numeric(df[a_col], errors="coerce")
 
-    # iv) costruzione DataFrame ordinato
+    # iv) costruzione DataFrame 
     
     out = (pd.DataFrame({
         "datetime": dt,
@@ -110,92 +111,61 @@ test  = load_2025[(load_2025["month"] >= 7) & (load_2025["month"] <= 8)].copy() 
 
 # 1.2) funzione che legga file CSV di forecast + actual generation
 
-import pandas as pd
-
 def read_res_total(path):
-    # 1) leggi CSV (ENTSO-E usa tipicamente ';')
+    
+    # i) leggo CSV 
     df = pd.read_csv(path, sep=';')
-    df.columns = [c.strip() for c in df.columns]
 
-    # 2) helper per trovare colonne per keyword
-    def find_col(cands):
-        for c in df.columns:
-            cu = c.upper()
-            if all(w.upper() in cu for w in cands):
-                return c
-        return None
+    # ii) prendo solo l'inizio dell'intervallo "start - end"
+    start = df["MTU (CET/CEST)"].astype(str).str.split(" - ", n=1).str[0]
+    dt = pd.to_datetime(start, dayfirst=True, errors="coerce")
 
-    def find_first_col(*alternatives):
-        """Prova più insiemi di keyword in ordine e ritorna il primo nome colonna trovato."""
-        for cands in alternatives:
-            col = find_col(cands)
-            if col is not None:
-                return col
-        return None
+    # iii) "n/e" nel csv continuava a dare errore, lo trasformo direttamente in zero
+    
+    def to_num(col):
+        return pd.to_numeric(df[col].replace("n/e", 0), errors="coerce").fillna(0)
 
-    # 3) colonna tempo (Time/MTU) -> prendo l'inizio intervallo
-    time_col = find_first_col(["TIME"], ["MTU"])
-    if time_col is None:
-        raise ValueError(f"Colonna tempo non trovata. Viste: {list(df.columns)[:8]} ...")
+    # iv) colonne forecast/actual e sommo + creo dataframe
+    
+    f_solar    = to_num("Generation - Solar [MW] Day Ahead/ Italy (IT)")
+    a_solar    = to_num("Generation - Solar [MW] Current / Italy (IT)")
 
-    start_txt = df[time_col].astype(str).str.split(pat=" - ", n=1).str[0]
-    dt = pd.to_datetime(start_txt, dayfirst=True, errors="coerce")
+    f_wind_off = to_num("Generation - Wind Offshore [MW] Day Ahead/ Italy (IT)")
+    a_wind_off = to_num("Generation - Wind Offshore [MW] Current / Italy (IT)")
 
-    # 4) nomi colonna per le 3 tecnologie (Forecast/Actual)
-    #    Day-ahead può comparire come "DAY AHEAD" o "DAY-AHEAD"
-    #    Actual può comparire come "CURRENT" o "ACTUAL"
-    f_wind_off_col = find_first_col(["GENERATION","WIND","OFFSHORE","DAY"])
-    a_wind_off_col = find_first_col(["GENERATION","WIND","OFFSHORE","CURRENT"],
-                                    ["GENERATION","WIND","OFFSHORE","ACTUAL"])
+    f_wind_on  = to_num("Generation - Wind Onshore [MW] Day Ahead/ Italy (IT)")
+    a_wind_on  = to_num("Generation - Wind Onshore [MW] Current / Italy (IT)")
 
-    f_wind_on_col  = find_first_col(["GENERATION","WIND","ONSHORE","DAY"])
-    a_wind_on_col  = find_first_col(["GENERATION","WIND","ONSHORE","CURRENT"],
-                                    ["GENERATION","WIND","ONSHORE","ACTUAL"])
-
-    f_solar_col    = find_first_col(["GENERATION","SOLAR","DAY"])
-    a_solar_col    = find_first_col(["GENERATION","SOLAR","CURRENT"],
-                                    ["GENERATION","SOLAR","ACTUAL"])
-
-    needed = [f_wind_off_col, a_wind_off_col, f_wind_on_col, a_wind_on_col, f_solar_col, a_solar_col]
-    if any(col is None for col in needed):
-        raise ValueError(
-            "Colonne RES non trovate (wind/solar, day-ahead/actual). "
-            f"Visto header: {list(df.columns)[:12]} ..."
-        )
-
-    # 5) conversione numerica e somma per TOTAL
-    to_num = lambda col: pd.to_numeric(df[col], errors="coerce")
-
-    generation_forecast = (
-        to_num(f_wind_off_col) + to_num(f_wind_on_col) + to_num(f_solar_col)
-    )
-    generation_actual = (
-        to_num(a_wind_off_col) + to_num(a_wind_on_col) + to_num(a_solar_col)
-    )
+    generation_forecast = f_solar + f_wind_off + f_wind_on
+    generation_actual   = a_solar + a_wind_off + a_wind_on
 
     out = (pd.DataFrame({
-            "datetime": dt,
-            "generation_forecast": generation_forecast,
-            "generation_actual": generation_actual
-          })
-          .dropna(subset=["datetime"])
-          .sort_values("datetime"))
+        "datetime": dt,
+        "generation_forecast": generation_forecast,
+        "generation_actual": generation_actual
+    })
+    .dropna(subset=["datetime"])
+    .sort_values("datetime"))
 
-    # 6) 15' -> 60' (potenza MW = media)
+    # v) da 15' a 60' → media (potenza in MW)
     out = (out.set_index("datetime")
-              .resample("h").mean()
+              .resample("H").mean()
               .reset_index())
 
-    # 7) feature
+    # vi) calcolo delta RES
     out["delta_res"] = out["generation_actual"] - out["generation_forecast"]
     out["month"] = out["datetime"].dt.month
     return out
 
     
-# provo 
+# UTILIZZO LA FUNZIONE 
+
 path_res = "AFRY_MB/res/generation_forecast_actual.csv" 
 res_2025 = read_res_total(path_res) 
-print(res_2025.head()) 
-print("Ore:", len(res_2025))
+
+# provo
+
+# print(res_2025.head()) 
+# print("Ore:", len(res_2025))
 
 
