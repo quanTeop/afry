@@ -8,7 +8,7 @@ import re
 import os
 from pathlib import Path
 from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import root_mean_squared_error
 
 
 plt.rcParams["figure.figsize"] = (9,4)
@@ -332,7 +332,7 @@ teP = feat.loc[test_mask,  ["datetime"]+colsP].dropna(subset=["prezzo_mb"])
 XtrP, XteP = trP[base_cols].to_numpy(), teP[base_cols].to_numpy() # XtrV,XteV e XtrP,XteP coincidono se i dati fossero completti, niente NaN ne in volumi ne in prezzi. (se manca qualcosa, dropna scarta la riga. RICORDA: avevi riempito i NaN dei FEATURE, mai dei TARGET)
 ytrP, yteP = trP["prezzo_mb"].to_numpy(), teP["prezzo_mb"].to_numpy()
 dt_test_P  = teP["datetime"].to_numpy()
-# pesi per valutare il prezzo: volumi orari (business-relevance)
+# pesi per valutare il prezzo
 wP = feat.loc[test_mask & feat["prezzo_mb"].notna(), "volume_mb"].to_numpy()
 
 print("Shapes → Volume", XtrV.shape, XteV.shape, " | Prezzo", XtrP.shape, XteP.shape)
@@ -340,8 +340,6 @@ print("Shapes → Volume", XtrV.shape, XteV.shape, " | Prezzo", XtrP.shape, XteP
 # ============================================
 # 3) calcolo RMSE
 # ============================================
-from sklearn.linear_model import LinearRegression, RidgeCV
-from sklearn.metrics import root_mean_squared_error
 
 def eval_rmse(y_true, y_pred, label="", weights=None):
     # RMSE: per il volume, rmse semplice. per il prezzo, meglio pesato!!! se errore sul prezzo è alto ma volume associato basso, non ha senso che gonfi l'RMSE
@@ -349,20 +347,32 @@ def eval_rmse(y_true, y_pred, label="", weights=None):
     print(f"[{label}] RMSE={rmse:,.1f}")
     return rmse
     
-# Volume: lineare 
-linV      = LinearRegression().fit(XtrV, ytrV) # alleno modello lineare sui dati train
-predV = linV.predict(XteV)                     # creo un vettore previsione del target
-eval_rmse(yteV, predV, "Volume (lin)")         # calcolo RMSE fra test e previsione
+# Volume: regressione lineare 
+linV = LinearRegression().fit(XtrV, ytrV)                  # alleno modello lineare sui dati train
+predV = linV.predict(XteV)                                 # creo un vettore previsione del target
+rmse_V = eval_rmse(yteV, predV, "Volume (lin)")            # calcolo RMSE fra test e previsione
 
-# Prezzo: lineare (uguale ma con peso)
+# Prezzo: regressione lineare (uguale ma con peso)
 linP  = LinearRegression().fit(XtrP, ytrP)
 predP = linP.predict(XteP)
-eval_rmse(yteP, predP, "Prezzo (lin)", weights=wP)  # RMSE pesato con volume_mb
+rmse_P = eval_rmse(yteP, predP, "Prezzo (lin)", weights=wP)           # calcolo RMSE fra test e previsione
 
+# sto comparando due rmse (uno sul volume, uno sul prezzo) con due unità di misura diverse
+# non ha senso fisico la cosa. divido allora per la media del dato TEST a cui ciascun rmse fa riferimento
+
+mu_V = float(np.nanmean(yteV))
+mu_P = float(np.average(yteP, weights=wP))     # pesata, perché non tornava quella semplice
+rmse_vero_V = rmse_V / mu_V
+rmse_vero_P = rmse_P / mu_P
+print(rmse_vero_V,rmse_vero_P)
+
+# rmse_vero_V = 0.77 mentre rmse_vero_P = 0.67 con mu_P semplice
+# rmse_vero_V = 0.77 mentre rmse_vero_P = 0.81 con mu_P PESATO. già meglio, mi aspettavo di predire meglio i volumi rispetto ai prezzi
 
 # ============================================
 # 4) GRAFICI
 # ============================================
+
 def plot_ts(dt, y_true, y_pred, title, ylabel):
     plt.figure(figsize=(10,3.5))
     plt.plot(dt, y_true, label="Real")
@@ -370,21 +380,6 @@ def plot_ts(dt, y_true, y_pred, title, ylabel):
     plt.title(title); plt.ylabel(ylabel); plt.xlabel("")
     plt.legend(); plt.tight_layout(); plt.show()
 
-def plot_scatter(y_true, y_pred, title):
-    plt.figure(figsize=(4.2,4.2))
-    plt.scatter(y_true, y_pred, s=6)
-    lim = [0, max(float(np.nanmax(y_true)), float(np.nanmax(y_pred)))]
-    plt.plot(lim, lim, lw=1)
-    plt.title(title); plt.xlabel("Real"); plt.ylabel("Pred")
-    plt.tight_layout(); plt.show()
-
 plot_ts(dt_test_V, yteV, predV, "Volume MB – Test (real vs pred)", "MWh")
-plot_scatter(yteV, predV, "Volume MB – Pred vs Real (test)")
 plot_ts(dt_test_P, yteP, predP, "Prezzo MB – Test (real vs pred)", "€/MWh")
-plot_scatter(yteP, predP, "Prezzo MB – Pred vs Real (test)")
 
-# Coefficienti (interpretazione grezza)
-coefV = pd.Series(linV.coef_,  index=base_cols).sort_values(key=np.abs, ascending=False)
-coefP = pd.Series(linP.coef_, index=base_cols).sort_values(key=np.abs, ascending=False)
-print("Top driver Volume:\n", coefV.head(8))
-print("Top driver Prezzo:\n", coefP.head(8))
