@@ -183,7 +183,7 @@ res_2025 = read_res_total(path_res)
 # 1.3) funzione che legga file CSV di volumi e prezzi MB
 # -----------------------------------------------------
 
-# converto numeri da formato italiano
+# 0) converto numeri da formato italiano
 def _it_num(x):
     s = pd.Series(x, dtype="string")
     s = s.str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
@@ -197,30 +197,30 @@ def read_mb_files(paths, zone="NORD"):
     for p in paths:
         df = pd.read_csv(p, sep=';', engine='python', dtype=str)
 
-        # nomi colonne (schema fissato per MB 2025)
+        # i) nomi colonne 
         tcol  = "Data Riferimento"
         zcol  = "Macrozona"
         sbcol = "Sbil aggregato zonale [MWh]"
         sgcol = "Segno aggregato zonale"
         pcol  = "Prezzo di sbilanciamento"  # lo uso direttamente come totale
 
-        # filtro NORD
+        # ii) filtro NORD
         dfx = df[df[zcol].str.upper().str.contains(zone.upper(), na=False)].copy()
         if dfx.empty:
             continue
 
-        # tempo (inizio del quarto)
+        # iii) tempo (inizio del quarto)
         dt_q = pd.to_datetime(dfx[tcol], dayfirst=True, errors="coerce")
 
-        # sbilancio con segno (QUARTO!!!)
+        # iv) sbilancio con segno (QUARTO!!!)
         mag   = _it_num(dfx[sbcol])                   # MWh per quarto!
         segno = dfx[sgcol].str.strip().map({'+': 1.0, '-': -1.0}).fillna(1.0)
         sbil_q = mag * segno
 
-        # prezzo di quarto 
+        # v) prezzo di quarto 
         price_q = _it_num(dfx[pcol])
         
-        # per ogni mese, creo un mini dataframe a tre colonne. un elemento di "frames" è un mese
+        # vi) per ogni mese, creo un mini dataframe a tre colonne. un elemento di "frames" è un mese
         frames.append(pd.DataFrame({
             "datetime_qh": dt_q,
             "sbil_qMWh": sbil_q,
@@ -230,17 +230,18 @@ def read_mb_files(paths, zone="NORD"):
     if not frames:
         raise ValueError("Nessun dato MB trovato. Controlla percorsi/zone.")
         
-    # unisco i mini dataframe
+    # vii) unisco i mini dataframe
     qh = (pd.concat(frames, ignore_index=True)
             .dropna(subset=["datetime_qh"])
             .sort_values("datetime_qh"))
 
-    # passo a ORARIO. somma dei 4 quarti per i volumi; prezzo medio pesato |sbil|
+    # viii) passo a ORARIO. somma dei 4 quarti per i volumi; prezzo medio pesato |sbil|
     qh["datetime"] = qh["datetime_qh"].dt.floor("h") # floor mi appiattisce all'ora. i 4 quarti della stessa ora hanno uguale datetime (USO GROUPBY SOTTO)
-    qh["w"] = qh["sbil_qMWh"].abs()                  # definisco il VOLUME come peso per cui moltiplico il prezzo del quarto associato
+    qh["w"] = qh["sbil_qMWh"].abs()                  # prendo lo sbilanciamento come peso per cui moltiplico il prezzo del quarto associato
     qh["wprice"] = qh["price_q"] * qh["w"]
     grp = qh.groupby("datetime", sort=True)
     sbil_netto  = grp["sbil_qMWh"].sum()
+    volume_mb  = grp["sbil_qMWh"].apply(lambda s: s.abs().sum())
     num         = grp["wprice"].sum()
     den         = grp["w"].sum()
     prezzo_mb   = num.div(den).where(den > 0, grp["price_q"].mean())   # se non c'è sbilanciamento, media semplice dei quarti. non so se capiti, ma avevo paura di una divisione per zero
@@ -248,7 +249,8 @@ def read_mb_files(paths, zone="NORD"):
     out = (pd.DataFrame({
         "datetime": sbil_netto.index,
         "sbil_netto": sbil_netto.values,
-        "prezzo_mb": prezzo_mb.values
+        "prezzo_mb": prezzo_mb.values,
+        "volume_mb": volume_mb.values
     })
     .reset_index(drop=True))
     out["month"] = out["datetime"].dt.month
@@ -268,10 +270,12 @@ mb_all = (pd.concat([mb_train, mb_test], ignore_index=True)
             .reset_index(drop=True))
 
 # =====================================================
-# 2) MERGE + FEATURE SET
+# 2) unisco i dati
 # =====================================================
+
+# unisco le tabelle 
 feat = (mb_all
-    .merge(mgp_nord, on="datetime", how="left")                              # prezzo MGP
+    .merge(mgp_nord, on="datetime", how="left")                              
     .merge(load_2025[["datetime","delta_domanda"]], on="datetime", how="left")
     .merge(res_2025[["datetime","delta_res"]],       on="datetime", how="left"))
 
@@ -281,24 +285,22 @@ feat["dow"]   = feat["datetime"].dt.dayofweek
 feat["month"] = feat["datetime"].dt.month
 feat["is_we"] = (feat["dow"]>=5).astype(int)
 
-# cicliche
+# cicliche: la regressione dava problemi, provo a rendere il tempo "circolare"
 feat["hour_sin"] = np.sin(2*np.pi*feat["hour"]/24)
 feat["hour_cos"] = np.cos(2*np.pi*feat["hour"]/24)
 feat["mth_sin"]  = np.sin(2*np.pi*(feat["month"]-1)/12)
 feat["mth_cos"]  = np.cos(2*np.pi*(feat["month"]-1)/12)
 
-# feature "fisiche": delta netto e sue trasformazioni
-feat["delta_net"] = feat["delta_domanda"] - feat["delta_res"]
+# definisco delta netto
+feat["delta_net"] = feat["delta_domanda"] - feat["delta_res"] # domanda più alta del previsto e RES più bassa del previsto: delta_net positivo
 feat["abs_net"]   = feat["delta_net"].abs()
 feat["pos_net"]   = feat["delta_net"].clip(lower=0.0)
 feat["neg_net"]   = (-feat["delta_net"].clip(upper=0.0))
 
-# opzionale: rimuovi target prezzo zero inattesi
+# rimuovo righe con prezzo <=0: se il volume è zero, il peso è nullo, mentre se è diverso da zero, è strano (penso riga errata)
 feat.loc[feat["prezzo_mb"]<=0, "prezzo_mb"] = np.nan
 
-# ============================================
-# 2bis) SPLIT + IMPUTAZIONE + SET PER TARGET
-# ============================================
+#separo train e test
 train_mask = feat["month"]<=6
 test_mask  = (feat["month"]>=7) & (feat["month"]<=8)
 
@@ -308,24 +310,26 @@ base_cols = [
     "hour_sin","hour_cos","mth_sin","mth_cos","is_we"
 ]
 
-# imputazione lieve (mediana del train) per MGP/ΔDom/ΔRES in test se mancanti
-for c in ["prezzo_mgp","delta_domanda","delta_res","delta_net","abs_net","pos_net","neg_net"]:
+# riempio righe NaN DEI FEATURE di test e train senza usare il train (se no non ha senso la regressione su quei dati): uso la mediana del train # per ogni colonna c
+for c in ["prezzo_mgp","delta_domanda","delta_res","delta_net","abs_net","pos_net","neg_net"]: 
     med = feat.loc[train_mask, c].median()
     feat[c] = feat[c].fillna(med)
+
+# ora creo matrici: X saranno le colonne base, Y prima volumi mb e poi prezzi mb
 
 # VOLUME
 colsV = base_cols + ["volume_mb"]
 trV = feat.loc[train_mask, ["datetime"]+colsV].dropna(subset=["volume_mb"])
 teV = feat.loc[test_mask,  ["datetime"]+colsV].dropna(subset=["volume_mb"])
-XtrV, XteV = trV[base_cols].to_numpy(), teV[base_cols].to_numpy()
-ytrV, yteV = trV["volume_mb"].to_numpy(), teV["volume_mb"].to_numpy()
+XtrV, XteV = trV[base_cols].to_numpy(), teV[base_cols].to_numpy() # matrici FEATURE
+ytrV, yteV = trV["volume_mb"].to_numpy(), teV["volume_mb"].to_numpy() # vettori TARGET
 dt_test_V  = teV["datetime"].to_numpy()
 
 # PREZZO
 colsP = base_cols + ["prezzo_mb"]
 trP = feat.loc[train_mask, ["datetime"]+colsP].dropna(subset=["prezzo_mb"])
 teP = feat.loc[test_mask,  ["datetime"]+colsP].dropna(subset=["prezzo_mb"])
-XtrP, XteP = trP[base_cols].to_numpy(), teP[base_cols].to_numpy()
+XtrP, XteP = trP[base_cols].to_numpy(), teP[base_cols].to_numpy() # XtrV,XteV e XtrP,XteP coincidono se i dati fossero completti, niente NaN ne in volumi ne in prezzi. (se manca qualcosa, dropna scarta la riga. RICORDA: avevi riempito i NaN dei FEATURE, mai dei TARGET)
 ytrP, yteP = trP["prezzo_mb"].to_numpy(), teP["prezzo_mb"].to_numpy()
 dt_test_P  = teP["datetime"].to_numpy()
 # pesi per valutare il prezzo: volumi orari (business-relevance)
