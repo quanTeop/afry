@@ -338,39 +338,27 @@ wP = feat.loc[test_mask & feat["prezzo_mb"].notna(), "volume_mb"].to_numpy()
 print("Shapes → Volume", XtrV.shape, XteV.shape, " | Prezzo", XtrP.shape, XteP.shape)
 
 # ============================================
-# 3) MODELLI + METRICHE
+# 3) calcolo RMSE
 # ============================================
 from sklearn.linear_model import LinearRegression, RidgeCV
-from sklearn.metrics import mean_squared_error, mean_absolute_error
+from sklearn.metrics import root_mean_squared_error
 
-def smape(y_true, y_pred, eps=1e-6):
-    return (200.0 * np.mean(np.abs(y_pred - y_true) / (np.abs(y_true) + np.abs(y_pred) + eps)))
+def eval_rmse(y_true, y_pred, label="", weights=None):
+    # RMSE: per il volume, rmse semplice. per il prezzo, meglio pesato!!! se errore sul prezzo è alto ma volume associato basso, non ha senso che gonfi l'RMSE
+    rmse = root_mean_squared_error(y_true, y_pred, sample_weight=weights)
+    print(f"[{label}] RMSE={rmse:,.1f}")
+    return rmse
+    
+# Volume: lineare 
+linV      = LinearRegression().fit(XtrV, ytrV) # alleno modello lineare sui dati train
+predV = linV.predict(XteV)                     # creo un vettore previsione del target
+eval_rmse(yteV, predV, "Volume (lin)")         # calcolo RMSE fra test e previsione
 
-def eval_reg(y_true, y_pred, label="", weights=None):
-    rmse = mean_squared_error(y_true, y_pred, squared=False)
-    mae  = mean_absolute_error(y_true, y_pred)
-    sm   = smape(y_true, y_pred)
-    if weights is not None:
-        wmae = np.average(np.abs(y_true - y_pred), weights=weights)
-        print(f"[{label}] RMSE={rmse:,.1f}  MAE={mae:,.1f}  sMAPE={sm:,.1f}%  WMAE={wmae:,.1f}")
-        return rmse, mae, sm, wmae
-    else:
-        print(f"[{label}] RMSE={rmse:,.1f}  MAE={mae:,.1f}  sMAPE={sm:,.1f}%")
-        return rmse, mae, sm
+# Prezzo: lineare (uguale ma con peso)
+linP  = LinearRegression().fit(XtrP, ytrP)
+predP = linP.predict(XteP)
+eval_rmse(yteP, predP, "Prezzo (lin)", weights=wP)  # RMSE pesato con volume_mb
 
-# Volume: lineare + log1p
-linV      = LinearRegression().fit(XtrV, ytrV)
-predV_lin = linV.predict(XteV)
-eval_reg(yteV, predV_lin, "Volume (lin)")
-
-linV_log  = LinearRegression().fit(XtrV, np.log1p(ytrV))
-predV     = np.expm1(linV_log.predict(XteV))
-eval_reg(yteV, predV, "Volume (log1p)")
-
-# Prezzo: Ridge con feature arricchite
-ridgeP = RidgeCV(alphas=[0.1, 1.0, 5.0, 10.0]).fit(XtrP, ytrP)
-predP  = ridgeP.predict(XteP)
-eval_reg(yteP, predP, "Prezzo (ridge)", weights=wP)
 
 # ============================================
 # 4) GRAFICI
