@@ -333,9 +333,9 @@ XtrP, XteP = trP[base_cols].to_numpy(), teP[base_cols].to_numpy() # XtrV,XteV e 
 ytrP, yteP = trP["prezzo_mb"].to_numpy(), teP["prezzo_mb"].to_numpy()
 dt_test_P  = teP["datetime"].to_numpy()
 # pesi per valutare il prezzo
-wP = feat.loc[test_mask & feat["prezzo_mb"].notna(), "volume_mb"].to_numpy()
+wP = feat.loc[test_mask & feat["prezzo_mb"].notna(), "volume_mb"].to_numpy()  # peso per rmse (vedi sotto): prendo solo ore di test con prezzo mb disponibile e ci faccio il vettore dei pesi
 
-print("Shapes → Volume", XtrV.shape, XteV.shape, " | Prezzo", XtrP.shape, XteP.shape)
+# print("Shapes → Volume", XtrV.shape, XteV.shape, " | Prezzo", XtrP.shape, XteP.shape)
 
 # ============================================
 # 3) calcolo RMSE
@@ -373,6 +373,8 @@ print(rmse_vero_V,rmse_vero_P)
 # 4) GRAFICI
 # ============================================
 
+# plot dati reali e stimati per volumi e prezzi MB
+
 def plot_ts(dt, y_true, y_pred, title, ylabel):
     plt.figure(figsize=(10,3.5))
     plt.plot(dt, y_true, label="Real")
@@ -382,4 +384,31 @@ def plot_ts(dt, y_true, y_pred, title, ylabel):
 
 plot_ts(dt_test_V, yteV, predV, "Volume MB – Test (real vs pred)", "MWh")
 plot_ts(dt_test_P, yteP, predP, "Prezzo MB – Test (real vs pred)", "€/MWh")
+
+# scatter per legare Delta domanda e Delta res a volumi e prezzi MB
+
+def quick_scatter(feat, mask):
+    import numpy as np, matplotlib.pyplot as plt
+    pairs = [("delta_domanda","volume_mb"),("delta_res","volume_mb"),
+             ("delta_domanda","prezzo_mb"),("delta_res","prezzo_mb")]
+    for x,y in pairs:
+        s = feat.loc[mask,[x,y]].dropna()
+        if len(s)==0: continue
+        r = np.corrcoef(s[x], s[y])[0,1]
+        plt.figure(figsize=(4,4))
+        plt.scatter(s[x], s[y], s=6, alpha=0.35)
+        plt.title(f"{x} vs {y}  (r={r:.2f})"); plt.xlabel(x); plt.ylabel(y)
+        plt.tight_layout(); plt.show()
+
+quick_scatter(feat, test_mask)  
+
+# errore percetuale medio res rispetto generazione
+
+res_tmp = res_2025.copy()
+res_tmp["perc_err_RES"] = np.where(res_tmp["generation_forecast"]>0,
+                                   np.abs(res_tmp["delta_res"]) / res_tmp["generation_forecast"],
+                                   np.nan)
+print("Errore percentuale medio RES (MAPE):", 100*np.nanmean(res_tmp["perc_err_RES"]), "%")
+
+
 
