@@ -160,7 +160,7 @@ def read_res_total(path):
 
     # v) da 15' a 60' → media (potenza in MW)
     out = (out.set_index("datetime")
-              .resample("H").mean()
+              .resample("h").mean()
               .reset_index())
 
     # vi) calcolo delta RES
@@ -346,12 +346,12 @@ def eval_rmse(y_true, y_pred, label="", weights=None):
     print(f"[{label}] RMSE={rmse:,.1f}")
     return rmse
     
-# Volume: regressione lineare 
+# stima del Volume: regressione lineare 
 linV = LinearRegression().fit(XtrV, ytrV)                  # alleno modello lineare sui dati train
 predV = linV.predict(XteV)                                 # creo un vettore previsione del target
 rmse_V = eval_rmse(yteV, predV, "Volume (lin)")            # calcolo RMSE fra test e previsione
 
-# Prezzo: regressione lineare (uguale ma con peso)
+# stima del Prezzo: regressione lineare (uguale ma con peso)
 linP  = LinearRegression().fit(XtrP, ytrP)
 predP = linP.predict(XteP)
 rmse_P = eval_rmse(yteP, predP, "Prezzo (lin)", weights=wP)           # calcolo RMSE fra test e previsione
