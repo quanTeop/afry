@@ -10,7 +10,6 @@ from pathlib import Path
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import root_mean_squared_error
 
-
 plt.rcParams["figure.figsize"] = (9,4)
 
 # =====================================================
@@ -364,7 +363,7 @@ mu_V = float(np.nanmean(yteV))
 mu_P = float(np.average(yteP, weights=wP))     # pesata, perché non tornava quella semplice
 rmse_vero_V = rmse_V / mu_V
 rmse_vero_P = rmse_P / mu_P
-print(rmse_vero_V,rmse_vero_P)
+print(f"{rmse_vero_V:.2f} {rmse_vero_P:.2f}")
 
 # rmse_vero_V = 0.77 mentre rmse_vero_P = 0.67 con mu_P semplice
 # rmse_vero_V = 0.77 mentre rmse_vero_P = 0.81 con mu_P PESATO. già meglio, mi aspettavo di predire meglio i volumi rispetto ai prezzi
@@ -378,7 +377,7 @@ print(rmse_vero_V,rmse_vero_P)
 def plot_ts(dt, y_true, y_pred, title, ylabel):
     plt.figure(figsize=(10,3.5))
     plt.plot(dt, y_true, label="Real")
-    plt.plot(dt, y_pred, label="Pred", alpha=0.9)
+    plt.plot(dt, y_pred, label="Pred")
     plt.title(title); plt.ylabel(ylabel); plt.xlabel("")
     plt.legend(); plt.tight_layout(); plt.show()
 
@@ -388,13 +387,12 @@ plot_ts(dt_test_P, yteP, predP, "Prezzo MB – Test (real vs pred)", "€/MWh")
 # scatter per legare Delta domanda e Delta res a volumi e prezzi MB
 
 def quick_scatter(feat, mask):
-    import numpy as np, matplotlib.pyplot as plt
     pairs = [("delta_domanda","volume_mb"),("delta_res","volume_mb"),
              ("delta_domanda","prezzo_mb"),("delta_res","prezzo_mb")]
     for x,y in pairs:
         s = feat.loc[mask,[x,y]].dropna()
-        if len(s)==0: continue
-        r = np.corrcoef(s[x], s[y])[0,1]
+        if len(s)==0: continue                 # loop sulle coppie definite prima, saltando eventuali NaN
+        r = np.corrcoef(s[x], s[y])[0,1]       # correlazione di pearson per capire linearità fra i dati
         plt.figure(figsize=(4,4))
         plt.scatter(s[x], s[y], s=6, alpha=0.35)
         plt.title(f"{x} vs {y}  (r={r:.2f})"); plt.xlabel(x); plt.ylabel(y)
@@ -407,8 +405,8 @@ quick_scatter(feat, test_mask)
 res_tmp = res_2025.copy()
 res_tmp["perc_err_RES"] = np.where(res_tmp["generation_forecast"]>0,
                                    np.abs(res_tmp["delta_res"]) / res_tmp["generation_forecast"],
-                                   np.nan)
-print("Errore percentuale medio RES (MAPE):", 100*np.nanmean(res_tmp["perc_err_RES"]), "%")
+                                   np.nan)             # vettore di errori percentuali. se il forecast gen è nullo, mette nan, così non ho divisioni per zero
+print("Errore percentuale medio RES (MAPE):", 100*np.nanmean(res_tmp["perc_err_RES"]), "%") # faccio la media dei dati del vettore precedente, ignorando i nan, e faccio la percentuale.
 
 
 
