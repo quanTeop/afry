@@ -184,42 +184,49 @@ res_2025 = read_res_total(path_res)
 # print("Ore:", len(res_2025))
 
 # -----------------------------------------------------
-# 1.3) Funzione che legge i CSV di volumi e prezzi MB 
+# 1.3) funzione che legga file CSV di volumi e prezzi MB
 # -----------------------------------------------------
 
-def read_mb(files_pattern, zone="NORD"):
-    paths = sorted(glob.glob(files_pattern))  # prendo tutti i file che matchano il pattern
-    frames = []
-    if not paths:
-        raise ValueError(f"Nessun file trovato per pattern: {files_pattern}")
+# 0) converto numeri da formato italiano: i file TERNA hanno numeri scritti come "10.000,00", ENTSO-E non avevano ne "." ne ","
+# con separatore ;
 
-    # colonne di interesse (nomenclature TERNA)
-    tcol  = "Data Riferimento"
-    zcol  = "Macrozona"
-    sbcol = "Sbil aggregato zonale [MWh]"
-    sgcol = "Segno aggregato zonale"
-    pcol  = "Prezzo di sbilanciamento"
+def _it_num(x):
+    s = pd.Series(x, dtype="string")
+    s = s.str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
+    return pd.to_numeric(s, errors='coerce').fillna(0.0)
+
+def read_mb_files(paths, zone="NORD"):
+
+    paths = [str(p) for p in paths]
+    frames = []
 
     for p in paths:
-        # leggo tutto come stringhe per gestire formati numerici italiani
         df = pd.read_csv(p, sep=';', engine='python', dtype=str)
 
-        # filtro per macrozona contenente 'NORD' (robusto a maiuscole/minuscole/spazi)
-        dfx = df[df[zcol].astype(str).str.upper().str.contains(zone.upper(), na=False)].copy()
+        # i) nomi colonne 
+        tcol  = "Data Riferimento"
+        zcol  = "Macrozona"
+        sbcol = "Sbil aggregato zonale [MWh]"
+        sgcol = "Segno aggregato zonale"
+        pcol  = "Prezzo di sbilanciamento"  # lo uso direttamente come totale
+
+        # ii) filtro NORD robusto a maiuscole/minuscole (continuava a darmi problemi)
+        dfx = df[df[zcol].str.upper().str.contains(zone.upper(), na=False)].copy()
         if dfx.empty:
             continue
 
-        # tempo = inizio del quarto
+        # iii) tempo (inizio del quarto)
         dt_q = pd.to_datetime(dfx[tcol], dayfirst=True, errors="coerce")
 
-        # sbilancio con segno (valori per QUARTO d'ora!)
-        mag   = _it_num(dfx[sbcol])                                  # MWh per quarto
-        segno = dfx[sgcol].str.strip().map({'+': 1.0, '-': -1.0}).fillna(1.0)
+        # iv) sbilancio con segno (QUARTO!!!)
+        mag   = _it_num(dfx[sbcol])                   # MWh per quarto!
+        segno = dfx[sgcol].str.strip().map({'+': 1.0, '-': -1.0}).fillna(1.0) # trasformo la colonna segno in un'unità positiva/negativa
         sbil_q = mag * segno
 
-        # prezzo di quarto
+        # v) prezzo di quarto 
         price_q = _it_num(dfx[pcol])
-
+        
+        # vi) per ogni mese, creo un mini dataframe a tre colonne. un elemento di "frames" è un mese
         frames.append(pd.DataFrame({
             "datetime_qh": dt_q,
             "sbil_qMWh": sbil_q,
@@ -227,26 +234,23 @@ def read_mb(files_pattern, zone="NORD"):
         }))
 
     if not frames:
-        raise ValueError("Nessun dato MB valido trovato (dopo il filtro di zona). Controlla pattern/zone.")
-
-    # concat + ordinamento
-    qh = (pd.concat(frames, ignore_index=True)
+        raise ValueError("Nessun dato MB trovato. Controlla percorsi/zone.") 
+        
+    # vii) unisco i mini dataframe
+        qh = (pd.concat(frames, ignore_index=True)
             .dropna(subset=["datetime_qh"])
             .sort_values("datetime_qh"))
 
-    # passo ad ORARIO
-    qh["datetime"] = qh["datetime_qh"].dt.floor("h")
-    qh["w"] = qh["sbil_qMWh"].abs()
+    # viii) passo a ORARIO. somma dei 4 quarti per i volumi; prezzo medio pesato sul modulo dello sbilanciamento
+    qh["datetime"] = qh["datetime_qh"].dt.floor("h") # floor mi appiattisce all'ora. i 4 quarti della stessa ora hanno uguale datetime (USO GROUPBY SOTTO)
+    qh["w"] = qh["sbil_qMWh"].abs()                  # prendo lo sbilanciamento come peso per cui moltiplico il prezzo del quarto associato
     qh["wprice"] = qh["price_q"] * qh["w"]
-
     grp = qh.groupby("datetime", sort=True)
-    sbil_netto = grp["sbil_qMWh"].sum()
+    sbil_netto  = grp["sbil_qMWh"].sum()
     volume_mb  = grp["sbil_qMWh"].apply(lambda s: s.abs().sum())
-    num        = grp["wprice"].sum()
-    den        = grp["w"].sum()
-
-    # prezzo medio orario pesato per |sbil|; fallback a media semplice dei quarti se den=0
-    prezzo_mb = num.div(den).where(den > 0, grp["price_q"].mean())
+    num         = grp["wprice"].sum()
+    den         = grp["w"].sum()
+    prezzo_mb   = num.div(den).where(den > 0, grp["price_q"].mean())   # se non c'è sbilanciamento, media semplice dei quarti. non so se capiti, ma avevo paura di una divisione per zero
 
     out = (pd.DataFrame({
         "datetime": sbil_netto.index,
@@ -255,13 +259,12 @@ def read_mb(files_pattern, zone="NORD"):
         "volume_mb": volume_mb.values
     })
     .reset_index(drop=True))
-
     out["month"] = out["datetime"].dt.month
     return out
 
-
 # UTILIZZO LA FUNZIONE
 
+# devo filtrare diversamente train e test, poiché ho un file per ogni mese
 base = Path("AFRY_MB/mb")
 files_train = [base/f"Riepilogo_Mensile_Quarto_Orario_2025{m:02d}.csv" for m in range(1,7)]
 files_test  = [base/f"Riepilogo_Mensile_Quarto_Orario_2025{m:02d}.csv" for m in (7,8)]
@@ -269,6 +272,7 @@ files_test  = [base/f"Riepilogo_Mensile_Quarto_Orario_2025{m:02d}.csv" for m in 
 mb_train = read_mb_files(files_train, zone="NORD")
 mb_test  = read_mb_files(files_test,  zone="NORD")
 
+# unisco in mb all
 mb_all = (pd.concat([mb_train, mb_test], ignore_index=True)
             .sort_values("datetime")
             .reset_index(drop=True))
@@ -289,7 +293,7 @@ feat["dow"]   = feat["datetime"].dt.dayofweek
 feat["month"] = feat["datetime"].dt.month
 feat["is_we"] = (feat["dow"]>=5).astype(int)
 
-# cicliche: la regressione dava problemi, provo a rendere il tempo "circolare"
+# cicliche: la regressione dava problemi, provo a rendere il tempo "circolare": rappresento ore e mesi come angoli su una circonferenza
 feat["hour_sin"] = np.sin(2*np.pi*feat["hour"]/24)
 feat["hour_cos"] = np.cos(2*np.pi*feat["hour"]/24)
 feat["mth_sin"]  = np.sin(2*np.pi*(feat["month"]-1)/12)
