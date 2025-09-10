@@ -209,7 +209,7 @@ def read_mb_files(paths, zone="NORD"):
         sgcol = "Segno aggregato zonale"
         pcol  = "Prezzo di sbilanciamento"  # lo uso direttamente come totale
 
-        # ii) filtro NORD
+        # ii) filtro NORD robusto (mi dava problemi)
         dfx = df[df[zcol].str.upper().str.contains(zone.upper(), na=False)].copy()
         if dfx.empty:
             continue
@@ -270,6 +270,8 @@ files_test  = [base/f"Riepilogo_Mensile_Quarto_Orario_2025{m:02d}.csv" for m in 
 mb_train = read_mb_files(files_train, zone="NORD")
 mb_test  = read_mb_files(files_test,  zone="NORD")
 
+# unisco in mb all
+
 mb_all = (pd.concat([mb_train, mb_test], ignore_index=True)
             .sort_values("datetime")
             .reset_index(drop=True))
@@ -290,7 +292,7 @@ feat["dow"]   = feat["datetime"].dt.dayofweek
 feat["month"] = feat["datetime"].dt.month
 feat["is_we"] = (feat["dow"]>=5).astype(int)
 
-# cicliche: la regressione dava problemi, provo a rendere il tempo "circolare"
+# cicliche: la regressione dava problemi, provo a rendere il tempo "circolare": rappresento ore e mesi come angoli su una circonferenza
 feat["hour_sin"] = np.sin(2*np.pi*feat["hour"]/24)
 feat["hour_cos"] = np.cos(2*np.pi*feat["hour"]/24)
 feat["mth_sin"]  = np.sin(2*np.pi*(feat["month"]-1)/12)
